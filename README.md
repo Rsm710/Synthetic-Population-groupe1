@@ -25,8 +25,6 @@ référence, pour connaître l'optimum.
 ## Commandes (PowerShell, JDK 21)
 
 ```powershell
-# si java n'est pas dans le PATH :
-$env:Path = "C:\Program Files\Eclipse Adoptium\jdk-21.0.12.101-hotspot\bin;" + $env:Path
 
 javac -encoding UTF-8 -d out (Get-ChildItem src\*.java).FullName
 java -cp out GreedyMain constraint_cells.csv --runs 10                         # écrit population.csv (meilleur run)
@@ -180,9 +178,3 @@ moins d'échanges utiles au dé-clonage.
   34/58 ; m = 120 : 109/352). Avec les tables d'arité 3 et 4, les comptes d'un petit groupe le déterminent presque
   entièrement : la population est **localement rigide** pour ces voisinages.
 
-## Pistes restantes (en restant dans un greedy)
-
-- Agir pendant la construction, puisque le dé-clonage ne crée plus d'exemplaires uniques : par exemple dé-cloner
-  après chaque colonne (sur les attributs déjà fixés), quand les échanges sont encore nombreux.
-- Combiner le greedy 2 (meilleure population brute) avec un dé-clonage adapté à des doublons concentrés.
-- Mieux choisir l'ordre des attributs en fonction de la diversité finale, pas seulement de la faisabilité.
