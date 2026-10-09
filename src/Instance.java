@@ -32,6 +32,11 @@ public final class Instance {
         for (int a = 0; a < K; a++) attrTables[a] = at.get(a).stream().mapToInt(Integer::intValue).toArray();
     }
 
+    /** Même structure (attributs, tables), autres cibles : sous-problème de taille n. */
+    public Instance withTargets(int n, int[][] targets) {
+        return new Instance(K, n, attrNames, valueNames, dom, tableIds, scope, stride, targets);
+    }
+
     /** Index de la cellule de la table t pour un individu (valeurs complètes). */
     public int cellOf(int t, int[] values) {
         int idx = 0;

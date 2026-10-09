@@ -1,5 +1,5 @@
 """Référence exacte (plan C) : max nombre de personas distinctes, marges exactes.
-Usage : python reference_cpsat.py contraintes.csv [temps_s] [population_initiale.csv]"""
+Usage : python reference_cpsat.py contraintes.csv [temps_s] [population_initiale.csv|-] [sortie.csv]"""
 import sys, itertools, collections, pandas as pd
 from ortools.sat.python import cp_model
 d = pd.read_csv(sys.argv[1]); limit = float(sys.argv[2]) if len(sys.argv) > 2 else 120
@@ -29,7 +29,7 @@ for k, (x, u) in enumerate(active):
 for tid, t in tables.items():
     for c, tg in t.items():
         m.Add(sum(n[k] for k in cells.get((tid, c), [])) == tg)
-if len(sys.argv) > 3:   # solution initiale (hint) issue du greedy Java
+if len(sys.argv) > 3 and sys.argv[3] != "-":   # solution initiale (hint) issue du greedy Java
     pop = pd.read_csv(sys.argv[3]); cnt = collections.Counter(tuple(r[a] for a in attrs) for _, r in pop.iterrows())
     for k, (x, u) in enumerate(active):
         m.AddHint(n[k], cnt.get(x, 0)); m.AddHint(y[k], 1 if cnt.get(x, 0) > 0 else 0)
@@ -38,3 +38,7 @@ m.Maximize(sum(y))
 s = cp_model.CpSolver(); s.parameters.max_time_in_seconds = limit; s.parameters.num_workers = 8
 st = s.Solve(m)
 print(s.StatusName(st), "distinctes =", int(s.ObjectiveValue()), "borne sup =", int(s.BestObjectiveBound()))
+if len(sys.argv) > 4 and st in (cp_model.OPTIMAL, cp_model.FEASIBLE):   # population trouvée, même format que GreedyMain
+    rows = [x for k, (x, u) in enumerate(active) for _ in range(s.Value(n[k]))]
+    pd.DataFrame(rows, columns=attrs).rename_axis("id").to_csv(sys.argv[4])
+    print("écrit :", sys.argv[4], len(rows), "individus")

@@ -21,7 +21,7 @@ import java.util.*;
  *  3. Si la colonne reste inexacte : retour arrière d'un niveau (on refait une colonne b déjà
  *     fixée, liée aux tables violées, puis a).
  */
-public final class ColumnGreedy {
+public class ColumnGreedy {
     final Instance in;
     final Random rnd;
     public double beta = 1.0;         // poids de la diversité dans le choix de valeur
@@ -217,6 +217,7 @@ public final class ColumnGreedy {
         // cap(g) = somme_w min_t cible_t(g, w) individus. Chaque c devient une table virtuelle de capacités.
         int d = in.dom[a];
         Ahead ah = lookAhead ? lookAhead(pop, known, a) : null;
+        prepareColumn(known, a);
 
         // --- 1. glouton : individus les plus contraints d'abord ---
         boolean[] done = new boolean[N];
@@ -239,7 +240,7 @@ public final class ColumnGreedy {
             for (int v = 0; v < d; v++) {
                 int mr = minRes(res, base[i], strideA, v);
                 double s = (mr > 0 ? 1e6 : 0) + (ah == null || ah.ok(i, v) ? 1e5 : 0)
-                        + mr / Math.pow(1 + tw[v], beta) * (1 + 0.1 * rnd.nextDouble());
+                        + diversity(mr, tw, v, baseKey[i] + v * radix[a]);
                 if (s > bs) { bs = s; bv = v; }
             }
             if (minRes(res, base[i], strideA, bv) <= 0) failed = true;
@@ -262,6 +263,18 @@ public final class ColumnGreedy {
         return left;
     }
 
+
+    /** Appelé au début de chaque remplissage de la colonne a (known[a] = true). */
+    protected void prepareColumn(boolean[] known, int a) {}
+
+    /**
+     * Préférence (entre 0 et 1e5) pour la valeur v d'un individu, parmi les valeurs de même faisabilité.
+     * mr = plus petit résiduel des cellules de v, tw[v] = jumeaux déjà envoyés sur v, branch = code des
+     * attributs connus avec a = v. Par défaut : séparer les jumeaux (mr / (1 + tw[v])^beta).
+     */
+    protected double diversity(int mr, int[] tw, int v, long branch) {
+        return mr / Math.pow(1 + tw[v], beta) * (1 + 0.1 * rnd.nextDouble());
+    }
 
     /** Tables virtuelles de capacité, une par attribut futur dont les groupes dépendent de a. */
     private static final class Ahead {
@@ -411,7 +424,7 @@ public final class ColumnGreedy {
     }
 
     /** Code d'une persona restreinte aux attributs connus (les autres comptent pour 0). */
-    private long knownKey(int[] x, boolean[] known) {
+    protected long knownKey(int[] x, boolean[] known) {
         long k = 0;
         for (int b = 0; b < in.K; b++) if (known[b]) k += x[b] * radix[b];
         return k;

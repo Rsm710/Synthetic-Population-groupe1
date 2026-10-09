@@ -8,7 +8,13 @@ import java.util.*;
 public final class CheckPopulation {
     public static void main(String[] args) throws Exception {
         Instance in = Instance.load(Paths.get(args[0]));
-        List<String> lines = Files.readAllLines(Paths.get(args[1]));
+        Evaluation.Report rep = Evaluation.evaluate(in, read(in, Paths.get(args[1])));
+        System.out.println(args[1] + " : N attendu=" + in.N + " | " + rep);
+    }
+
+    /** Lit un fichier population (en-tête = noms d'attributs) en indices de valeurs (-1 si valeur inconnue). */
+    public static int[][] read(Instance in, Path path) throws Exception {
+        List<String> lines = Files.readAllLines(path);
         String[] header = lines.get(0).split(",");
         int[] col = new int[in.K];                     // colonne du fichier pour chaque attribut
         Arrays.fill(col, -1);
@@ -24,7 +30,6 @@ public final class CheckPopulation {
             for (int a = 0; a < in.K; a++) x[a] = Arrays.asList(in.valueNames[a]).indexOf(f[col[a]].trim());
             pop.add(x);
         }
-        Evaluation.Report rep = Evaluation.evaluate(in, pop.toArray(new int[0][]));
-        System.out.println(args[1] + " : N attendu=" + in.N + " | " + rep);
+        return pop.toArray(new int[0][]);
     }
 }
