@@ -26,8 +26,6 @@ référence, pour connaître l'optimum.
 ## Commandes (PowerShell, JDK 21)
 
 ```powershell
-# si java n'est pas dans le PATH :
-$env:Path = "C:\Program Files\Eclipse Adoptium\jdk-21.0.12.101-hotspot\bin;" + $env:Path
 
 javac -encoding UTF-8 -d out (Get-ChildItem src\*.java).FullName
 java -cp out GreedyMain constraint_cells.csv --runs 10                         # écrit population.csv (meilleur run)
