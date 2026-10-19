@@ -89,6 +89,41 @@ public final class Declone {
         }
         sAttrs = ss.toArray(new int[0][]);
         bAttrs = bs.toArray(new int[0][]);
+        // double échange compensé : tous les S (masque), y compris ceux qui couvrent tout avec leur frontière
+        List<Integer> as = new ArrayList<>(), ab = new ArrayList<>();
+        if (K <= 20) for (int s : masks) {
+            int n = 0;
+            for (int b = 0; b < K; b++) if ((s >> b & 1) != 0) n |= nb[b];
+            if ((n & ~s) == 0) continue;
+            as.add(s); ab.add(n & ~s);
+        }
+        allS = as.stream().mapToInt(Integer::intValue).toArray();
+        allB = ab.stream().mapToInt(Integer::intValue).toArray();
+        tmask = new int[in.T];
+        for (int t = 0; t < in.T; t++) for (int b : in.scope[t]) tmask[t] |= 1 << b & known;
+    }
+
+    final int[] allS, allB;           // double échange : masques de S et de sa frontière
+    final int[] tmask;                // attributs connus de chaque table (masque)
+
+    /**
+     * Probabilité de tenter un double échange compensé (degré 4) au lieu d'un échange simple. (i, j) échangent S en
+     * différant sur F ⊆ B(S), 1 ≤ |F| ≤ fmax : seul, ce mouvement casse les tables qui touchent F et S. Soit Tf ces
+     * tables, U = S ∩ ∪Tf, C = ∪Tf \ (S ∪ F). La paire (k, l), échangée sur le même S, annule exactement l'écart si
+     * k = (i sur F, j sur U, i sur C), l = (j sur F, i sur U, i sur C) et k, l égaux sur B(S) \ F : pour t ∈ Tf,
+     * les cellules ajoutées par (i, j) sont celles que retire (k, l), et inversement ; les autres tables sont dans
+     * S ∪ (B(S) \ F) ou disjointes de S pour chaque paire.
+     */
+    public double deg4 = 0;
+    public int fmax = 1;
+    /** Garde-fou d'entropie : refuse tout mouvement qui fait baisser le critère secondaire, même s'il gagne des distinctes. */
+    public boolean hguard = false;
+    public long deg4Moves;            // diagnostics : doubles échanges acceptés
+
+    private int keyMask(int[] x, int m) {
+        int k = 0;
+        for (int b = 0; b < in.K; b++) if ((m >> b & 1) != 0) k += x[b] * (int) radix[b];
+        return k;
     }
 
     private int[] bits(int m) {
@@ -150,9 +185,10 @@ public final class Declone {
         int[][] bestPop = copy(pop);
         long start = System.nanoTime(), end = start + timeMs * 1_000_000L;
         double T = temp;
-        int[] cand = new int[N], candK = new int[N];
-        iterations = 0; accepted = 0; cycles = 0;
-        long[] o = new long[3], n = new long[3];
+        int[] cand = new int[N], candK = new int[N], candL = new int[N];
+        iterations = 0; accepted = 0; cycles = 0; deg4Moves = 0;
+        long[] o = new long[4], n = new long[4];
+        List<Integer> js = new ArrayList<>(), kl = new ArrayList<>(), ll = new ArrayList<>();
         while (true) {
             if ((iterations & 255) == 0) {
                 long now = System.nanoTime();
@@ -167,12 +203,56 @@ public final class Declone {
                 if (m >= 2 && (small == 0 || rnd.nextDouble() < Math.pow(2.0 / m, small))) break;
                 i = rnd.nextInt(N);
             }
+            boolean d4 = deg4 > 0 && allS.length > 0 && rnd.nextDouble() < deg4;
             int q = rnd.nextInt(sAttrs.length);
             int[] S = sAttrs[q], B = bAttrs[q];
+            if (d4) { q = rnd.nextInt(allS.length); S = bits(allS[q]); }
             long bi = key(pop[i], B), si = key(pop[i], S);
-            boolean cyc = cycle > 0 && rnd.nextDouble() < cycle;
+            boolean cyc = !d4 && cycle > 0 && rnd.nextDouble() < cycle;
             double bestScore = Double.NEGATIVE_INFINITY; int nc = 0, bestD = 0;
-            if (!cyc) {
+            if (d4) {
+                // double échange compensé : quelques partenaires j cassants, puis toutes les paires (k, l) qui compensent
+                int Sm = allS[q], Bm = allB[q];
+                js.clear();
+                for (int j = 0; j < N; j++) {
+                    if (j == i) continue;
+                    int d = 0;
+                    for (int b : knownAttrs) if (pop[i][b] != pop[j][b]) d |= 1 << b;
+                    int F = d & Bm;
+                    if (F != 0 && Integer.bitCount(F) <= fmax && (d & Sm) != 0) js.add(j);
+                }
+                for (int tr = 0; tr < Math.min(4, js.size()); tr++) {
+                    int j = js.get(rnd.nextInt(js.size()));
+                    int d = 0;
+                    for (int b : knownAttrs) if (pop[i][b] != pop[j][b]) d |= 1 << b;
+                    int F = d & Bm, Tf = 0;
+                    for (int t = 0; t < in.T; t++) if ((tmask[t] & F) != 0 && (tmask[t] & Sm) != 0) Tf |= tmask[t];
+                    int U = Sm & Tf, C = Tf & ~Sm & ~F, A = F | U | C, R = Bm & ~F;
+                    if ((d & U) == 0) continue;               // écart nul : simple échange valide
+                    int kT = keyMask(pop[i], F) + keyMask(pop[j], U) + keyMask(pop[i], C);
+                    int lT = keyMask(pop[j], F) + keyMask(pop[i], U) + keyMask(pop[i], C);
+                    kl.clear(); ll.clear();
+                    for (int x = 0; x < N; x++) {
+                        int kx = keyMask(pop[x], A);
+                        if (kx == kT) kl.add(x); else if (kx == lT) ll.add(x);
+                    }
+                    long sj = key(pop[j], S);
+                    for (int k : kl) {
+                        int rk = keyMask(pop[k], R);
+                        long sk = key(pop[k], S);
+                        for (int l : ll) {
+                            if (keyMask(pop[l], R) != rk) continue;
+                            long sl = key(pop[l], S);
+                            o[0] = full[i]; o[1] = full[j]; o[2] = full[k]; o[3] = full[l];
+                            n[0] = full[i] - si + sj; n[1] = full[j] - sj + si; n[2] = full[k] - sk + sl; n[3] = full[l] - sl + sk;
+                            double sc = score(cnt, o, n, 4);
+                            if (hguard && lastE < -1e-9) continue;
+                            if (sc > bestScore) { bestScore = sc; nc = 0; bestD = lastD; }
+                            if (sc == bestScore && nc < N) { cand[nc] = j; candK[nc] = k; candL[nc] = l; nc++; }
+                        }
+                    }
+                }
+            } else if (!cyc) {
                 // meilleur partenaire j : même frontière, différent sur S et hors de S ∪ B
                 for (int j = 0; j < N; j++) {
                     if (j == i || key(pop[j], B) != bi) continue;
@@ -182,6 +262,7 @@ public final class Declone {
                     n[0] = full[i] - si + sj; n[1] = full[j] - sj + si;
                     if (n[0] == full[j]) continue;    // i et j identiques hors de S : simple permutation
                     double sc = score(cnt, o, n, 2);
+                    if (hguard && lastE < -1e-9) continue;
                     if (sc > bestScore) { bestScore = sc; nc = 0; bestD = lastD; }
                     if (sc == bestScore) cand[nc++] = j;
                 }
@@ -201,6 +282,7 @@ public final class Declone {
                         o[0] = full[i]; o[1] = full[j]; o[2] = full[k];
                         n[0] = full[i] - si + sj; n[1] = full[j] - sj + sk; n[2] = full[k] - sk + si;
                         double sc = score(cnt, o, n, 3);
+                        if (hguard && lastE < -1e-9) continue;
                         if (sc > bestScore) { bestScore = sc; nc = 0; bestD = lastD; }
                         if (sc == bestScore && nc < N) { cand[nc] = j; candK[nc] = k; nc++; }
                     }
@@ -213,7 +295,19 @@ public final class Declone {
             if (neutralMove) { if (rnd.nextDouble() >= neutral) continue; }
             else if (bestScore < 0 && (T <= 0 || rnd.nextDouble() >= Math.exp(bestScore / W / T))) continue;
             int c = rnd.nextInt(nc), j = cand[c];
-            if (!cyc) {
+            if (d4) {
+                int k = candK[c], l = candL[c];
+                long sj = key(pop[j], S), sk = key(pop[k], S), sl = key(pop[l], S);
+                o[0] = full[i]; o[1] = full[j]; o[2] = full[k]; o[3] = full[l];
+                n[0] = full[i] - si + sj; n[1] = full[j] - sj + si; n[2] = full[k] - sk + sl; n[3] = full[l] - sl + sk;
+                apply(cnt, o, n, 4);
+                for (int b : S) {
+                    int v = pop[i][b]; pop[i][b] = pop[j][b]; pop[j][b] = v;
+                    v = pop[k][b]; pop[k][b] = pop[l][b]; pop[l][b] = v;
+                }
+                full[i] = n[0]; full[j] = n[1]; full[k] = n[2]; full[l] = n[3];
+                deg4Moves++;
+            } else if (!cyc) {
                 long sj = key(pop[j], S);
                 o[0] = full[i]; o[1] = full[j]; n[0] = full[i] - si + sj; n[1] = full[j] - sj + si;
                 apply(cnt, o, n, 2);
@@ -239,6 +333,7 @@ public final class Declone {
 
     private double W;                 // poids des distinctes dans le score
     private int lastD;                // variation des distinctes du dernier score
+    private double lastE;             // variation du critère secondaire (entropie) du dernier score
     private long sq;                  // variation de Σ m² accumulée par dec / inc
     private double nlnF, nlnL;        // variations de Σ n ln n sur les cellules de X, et de tous les X_{-B}, accumulées par apply
     private List<int[]> masks;        // entropy ≥ 2 : ensembles B (taille radius) des projections X_{-B}
@@ -282,6 +377,7 @@ public final class Declone {
         double e = entropy == 1 ? nlnF : entropy == 2 ? nlnL : nlnL - masks.size() * nlnF;
         apply(cnt, n, o, m);
         lastD = d;
+        lastE = entropy > 0 ? -e : 0;
         return d * W + (concentrate ? s2 : spread ? -s2 : 0) + (entropy > 0 ? -e : 0);
     }
 

@@ -3,7 +3,7 @@ import java.util.*;
 
 /**
  * Usage : java -cp out GreedyMain <contraintes.csv> [--runs R] [--seed s]
- *                                 [--fc on|off] [--retries r] [--backtrack b] [--depth d] [--restarts m] [--repair iters] [--perfect bonus] [--cross lambda] [--beta b] [--greedy 1|2] [--gamma g] [--entropy off|full|loo] [--lambda l] [--alpha a] [--declone ms] [--dentropy off|full|loo|near] [--dradius r] [--dmu mu] [--cycle p] [--neutral p] [--temp T] [--concentrate on|off] [--small s] [--coldeclone ms] [--colfrom p] [--colneutral p] [--colspread on|off] [--colbound on|off] [--starts m] [--out population.csv] [--quiet]
+ *                                 [--fc on|off] [--retries r] [--backtrack b] [--depth d] [--restarts m] [--repair iters] [--perfect bonus] [--cross lambda] [--beta b] [--greedy 1|2] [--gamma g] [--entropy off|full|loo] [--lambda l] [--alpha a] [--declone ms] [--dentropy off|full|loo|near] [--dradius r] [--dmu mu] [--cycle p] [--deg4 p] [--dfmax f] [--hguard on|off] [--neutral p] [--temp T] [--concentrate on|off] [--small s] [--coldeclone ms] [--colfrom p] [--colneutral p] [--colspread on|off] [--colbound on|off] [--starts m] [--out population.csv] [--quiet]
  */
 public final class GreedyMain {
     public static void main(String[] args) throws Exception {
@@ -11,7 +11,7 @@ public final class GreedyMain {
         int runs = 10; long seed = 0; boolean fc = true, quiet = false;
         int greedy = 1; double gamma = 1.0; int entropy = 1; double lambda = 1.0, alpha = 0.3;
         double beta = 2.0; int retries = 3, backtrack = 40, repair = 500, depth = 2, restarts = 10; double cross = 0, perfect = 1000;
-        long declone = 1500; int dentropy = 2, dradius = 1; double dmu = -1, cycle = 0; double neutral = 1.0, temp = 0, small = 0; int starts = 1; boolean concentrate = false;
+        long declone = 1500; int dentropy = 2, dradius = 1; double dmu = -1, cycle = 0, deg4 = 0.2; int dfmax = 1; boolean hguard = false; double neutral = 1.0, temp = 0, small = 0; int starts = 1; boolean concentrate = false;
         long colDeclone = 0; int colFrom = 1; double colNeutral = 1.0; boolean colSpread = false, colBound = false;
         String out = "population.csv";
         for (int k = 1; k < args.length; k++) {
@@ -34,6 +34,9 @@ public final class GreedyMain {
                 case "--dradius" -> dradius = Integer.parseInt(args[++k]);
                 case "--dmu" -> dmu = Double.parseDouble(args[++k]);
                 case "--cycle" -> cycle = Double.parseDouble(args[++k]);
+                case "--deg4" -> deg4 = Double.parseDouble(args[++k]);
+                case "--dfmax" -> dfmax = Integer.parseInt(args[++k]);
+                case "--hguard" -> hguard = args[++k].equals("on");
                 case "--neutral" -> neutral = Double.parseDouble(args[++k]);
                 case "--temp" -> temp = Double.parseDouble(args[++k]);
                 case "--concentrate" -> concentrate = args[++k].equals("on");
@@ -85,7 +88,7 @@ public final class GreedyMain {
                 int b0 = rp.distinct; Evaluation.Report r0 = rp;
                 if (rp.error == 0 && declone > 0) {          // post-optimisation : échanges qui gardent l'exactitude
                     Declone dc = new Declone(in, rnd);
-                    dc.timeMs = declone; dc.neutral = neutral; dc.temp = temp; dc.concentrate = concentrate; dc.small = small; dc.entropy = dentropy; dc.radius = dradius; dc.mu = dmu; dc.cycle = cycle;
+                    dc.timeMs = declone; dc.neutral = neutral; dc.temp = temp; dc.concentrate = concentrate; dc.small = small; dc.entropy = dentropy; dc.radius = dradius; dc.mu = dmu; dc.cycle = cycle; dc.deg4 = deg4; dc.fmax = dfmax; dc.hguard = hguard;
                     dc.run(p);
                     rp = Evaluation.evaluate(in, p);
                 }

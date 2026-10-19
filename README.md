@@ -19,6 +19,7 @@ référence, pour connaître l'optimum.
 | `src/CheckPopulation.java` | revérifie un fichier population |
 | `src/Bounds.java` | analyse : propagation de bornes sur les personas |
 | `src/Lns.java` | analyse : reconstruction de sous-groupes (non branchée) |
+| `src/Deg4Diag.java` | analyse : compte les doubles échanges compensés (degré 4) améliorants sur une population |
 | `src/Main.java`, `GreedyBuilder.java`, `LocalSearch.java`, `Population.java` | ancienne référence : greedy individuel + recuit |
 | `tools/reference_cpsat.py` | optimum exact par CP-SAT (référence) |
 | `tools/reference_ipf.py` | référence de réalisme : loi d'entropie maximale P* (IPF) et ressemblances d'un échantillon typique |
@@ -34,6 +35,8 @@ java -cp out GreedyMain constraint_cells.csv --runs 20 --quiet --greedy 2      #
 java -cp out GreedyMain constraint_cells.csv --runs 20 --quiet --declone 0     # greedy seul, sans dé-clonage
 java -cp out CheckPopulation constraint_cells.csv population.csv               # revérifie un fichier écrit
 java -cp out Bounds constraint_cells.csv population.csv                        # bornes par propagation
+java -cp out Deg4Diag constraint_cells.csv 1 population.csv                    # mouvements de degré 4 améliorants (|F| ≤ 1)
+java -cp out GreedyMain constraint_cells.csv --runs 20 --quiet --deg4 0        # sans doubles échanges (ancien défaut)
 java -cp out Main constraint_cells.csv --runs 2 --time 8000                    # ancienne référence
 
 # optimum exact (Python 3.12 : pip install ortools pandas) ; '-' à la place de population.csv = sans solution de départ
@@ -53,7 +56,9 @@ Options de `GreedyMain` (défauts entre parenthèses) :
   `--perfect` (1000), `--cross` (0) ;
 - dé-clonage : `--declone` (1500 ms, 0 = désactivé), `--dentropy off|full|loo|near` (loo, critère d'entropie),
   `--dradius` (1, projections X_{−B} avec |B| = r), `--dmu` (−1 = lexicographique : distinctes puis entropie ; μ ≥ 0 :
-  objectif pondéré μ × distinctes + N × entropie), `--cycle` (0, probabilité de tenter un cycle à trois individus),
+  objectif pondéré μ × distinctes + N × entropie), `--cycle` (0, probabilité de tenter un cycle à trois individus), `--deg4` (0.2, probabilité de tenter un double
+  échange compensé), `--dfmax` (1, |F| maximal), `--hguard on|off` (off, refuse tout mouvement qui baisse le critère
+  d'entropie),
   `--neutral` (1.0), `--temp` (0, recuit), `--concentrate on|off` (off),
   `--small` (0) ;
 - dé-clonage après chaque colonne : `--coldeclone` (0 ms par colonne = désactivé), `--colfrom` (1, première position),
@@ -108,6 +113,37 @@ meilleur partenaire j (gain en distinctes), on accepte les gains positifs et les
 population. Variantes : recuit (`--temp`), concentration des doublons à gain égal (`--concentrate`), départ dans les
 petits paquets (`--small`), plusieurs constructions par run (`--starts`).
 
+### Double échange compensé (`--deg4`, mouvements de degré 4)
+
+**Le degré 2 est épuisé.** Si deux individus i, j deviennent i′, j′ avec les mêmes projections sur toutes les tables,
+alors sur chaque table i′ prend ses valeurs entièrement chez i ou chez j : les attributs pris chez j forment un S
+qu'aucune table ne relie à un attribut où i et j diffèrent, c'est exactement l'échange sur S à frontière égale. Le
+voisinage de `Declone` contient donc déjà tous les mouvements à deux individus. Le graphe des tables a des cycles
+qu'aucune table ne couvre (A3–A9–A11, A0–A2–A4…) : le modèle n'est pas décomposable et sa base de Markov contient des
+mouvements de degré ≥ 4.
+
+**Mouvement.** (i, j) échangent S alors qu'ils diffèrent sur F ⊆ B(S), 1 ≤ |F| ≤ `--dfmax` : seul, ce mouvement casse
+les tables Tf qui touchent F et S. Avec U = S ∩ ∪Tf et C = ∪Tf \ (S ∪ F), une seconde paire (k, l) échangée sur le même
+S annule exactement l'écart si
+- k = (valeurs de i sur F, de j sur U, de i sur C), l = (valeurs de j sur F, de i sur U, de i sur C) ;
+- k et l coïncident sur B(S) \ F.
+
+Pour t ∈ Tf, les cellules ajoutées par (i, j) sont celles que retire (k, l), et inversement ; toute autre table est
+dans S ∪ (B(S) \ F) ou disjointe de S pour chaque paire. Les quatre individus sont forcément distincts. Recherche : i
+en doublon, S tiré parmi tous les ensembles (y compris ceux où S ∪ B(S) couvre tout), jusqu'à 4 partenaires j
+cassants, puis toutes les paires (k, l) trouvées en un passage sur la population. Score : le même que l'échange
+(distinctes, puis Σ_b H(X_{−b})), évalué sur les 4 personas.
+
+**Diagnostic** (`Deg4Diag`, sur des populations finales du défaut, |F| = 1) : toutes les paires de personas et tous
+les S, écart haché linéairement (Zobrist additif, δ₁ + δ₂ = 0 en O(1)), chaque mouvement revérifié table par table.
+
+| Population | Échanges valides | dont gain de distinctes | Mouvements de degré 4 exacts | dont gain de distinctes | dont entropie en hausse à distinctes égales |
+|---|---|---|---|---|---|
+| seed 0 (293 distinctes) | 17 835 | **0** | 309 443 | **137** (max +2) | 1870 |
+| seed 1 (296 distinctes) | 19 137 | **0** | 371 707 | **211** | 2403 |
+
+Aucun faux positif du hachage. La population est un optimum local pour les échanges, mais pas pour le degré 4.
+
 ### Entropie de Shannon dès la construction (`--entropy`)
 
 Notations : pour un ensemble d'attributs A, H(X_A) = ln N − (1/N) Σ_c n_c ln n_c (nats), sur la loi empirique de la
@@ -139,7 +175,7 @@ Mesures ajoutées à `Evaluation` : déficit D = K·ln N − Σ_b H(X_{−b}), �
 ressemblances du défaut sont déjà au niveau d'une population réaliste (voir « Référence de réalisme »). H(X_{−b}) = ln N ssi tous les individus restent
 distincts quand on ignore b ; donc D = 0 ssi aucune paire d'individus n'est à distance ≤ 1. C'est le critère `loo`.
 Σ_b H(X_b | X_{−b}) (`near`) ne compte que la distance exactement 1 : il se réduit en transformant des quasi-clones
-en clones, et n'est pas le bon objectif. Défaut : `--entropy full --dentropy loo`.
+en clones, et n'est pas le bon objectif. Défaut : `--entropy full --dentropy loo` (plus `--deg4 0.2`, voir plus bas).
 
 `Evaluation.evaluate` recalcule tout depuis zéro : c'est le seul juge des résultats affichés.
 
@@ -155,15 +191,18 @@ versions actuelles sont exacts.
 | greedy 1 seul (beta = 2) | 251,9 | 266 | 0,7 s |
 | greedy 2 seul | 258,8 | 270 | 1,1 s |
 | greedy 1 + dé-clonage 1,5 s (ancien défaut) | 292,5 | 297 | 2,6 s |
-| **+ `--entropy full --dentropy loo` (défaut)** | **292,8** | 299 | 2,2 s |
+| + `--entropy full --dentropy loo` | 292,8 | 299 | 2,2 s |
+| **+ `--deg4 0.2` (défaut, doubles échanges compensés)** | **302,5** | 307 | 2,2 s |
+| défaut, dé-clonage 6 s | 307,9 | 311 | 6,6 s |
 | greedy 2 + dé-clonage 1,5 s | 290,2 | 296 | 2,9 s |
 | greedy 1 + dé-clonage, 8 constructions par run | 297,0 | 300 | 15 s |
 | **optimum (CP-SAT, prouvé)** | **331** | 331 | 900 s |
 
-Le nouveau défaut garde les distinctes et réduit les ressemblances : déficit K·ln N − Σ_b H(X_{−b}) 17,26 → 16,86,
-paires à distance ≤ 1 : 9367 → 9050 (voir « Entropie dans le dé-clonage final »).
+L'entropie dans le dé-clonage garde les distinctes et réduit les ressemblances : déficit K·ln N − Σ_b H(X_{−b})
+17,26 → 16,86, paires à distance ≤ 1 : 9367 → 9050 (voir « Entropie dans le dé-clonage final »). Les doubles échanges
+compensés ajoutent 10 distinctes et +0,06 nat (voir « Double échange compensé : réglages testés »).
 
-Le greedy atteint environ 88 % de l'optimum en moyenne (292,5 / 331 ; meilleur run : 302, soit 91 %).
+Le greedy atteint environ 91 % de l'optimum en moyenne (302,5 / 331 ; meilleur run : 311, soit 94 %).
 
 ### Historique du greedy 1
 
@@ -408,12 +447,43 @@ réaliste ? **Réponse : non, le défaut est déjà au niveau réaliste.**
   34/58 ; m = 120 : 109/352). Avec les tables d'arité 3 et 4, les comptes d'un petit groupe le déterminent presque
   entièrement : la population est **localement rigide** pour ces voisinages.
 
+### Double échange compensé : réglages testés
+
+20 runs (seeds 0–19), défaut (`--entropy full --dentropy loo`), dé-clonage 1,5 s, tous exacts.
+
+| `--deg4` | Distinctes | H(X) | D1 | Paires d = 0 | d = 1 | **d ≤ 1** | d = 2 | Temps / run |
+|---|---|---|---|---|---|---|---|---|
+| 0 (ancien défaut) | 292,6 | 5,033 | 16,87 | 1988 | 7080 | 9068 | 13063 | 2,4 s |
+| 0,05 | 302,2 | 5,094 | 16,26 | 1851 | 6876 | 8727 | 13294 | 2,2 s |
+| 0,1 | 302,1 | 5,092 | 16,28 | 1860 | 6849 | 8709 | 13313 | 2,2 s |
+| **0,2 (défaut)** | **302,5** | 5,097 | 16,22 | 1849 | 6866 | 8714 | 13271 | 2,2 s |
+| 0,3 | 300,9 | 5,096 | 16,23 | 1821 | 6848 | 8669 | 13300 | 2,2 s |
+| 0,5 | 301,5 | **5,105** | **16,15** | 1800 | 6787 | 8587 | 13360 | 2,3 s |
+| 0,1 / 0,2 avec `--dfmax 2` | 301,7 / 302,6 | 5,087 / 5,098 | 16,33 / 16,23 | | | 8804 / 8739 | | 2,2 s |
+| 0,1 avec `--hguard on` | 293,3 | 5,129 | 15,93 | 1570 | 6745 | 8315 | 13530 | 2,2 s |
+| 0 avec `--hguard on` | 280,7 | 5,059 | 16,61 | 1706 | 6934 | 8640 | 13362 | 2,1 s |
+
+Budget 6 s (10 runs) : `--deg4 0` 293,5 distinctes (meilleure 297), H = 5,036 ; **`--deg4 0.2` 307,9 (meilleure
+311), H = 5,121**, d ≤ 1 = 8615.
+
+- **+10 distinctes à budget égal** (292,6 → 302,5), **+14 à 6 s** (293,5 → 307,9) : le plateau ~292 était bien dû au
+  voisinage. Le meilleur run passe de 302 à 311 (optimum 331 : 94 %).
+- **L'entropie progresse aussi** : H(X) +0,06 nat, déficit D1 16,87 → 16,22. Rien n'est perdu sur le critère secondaire :
+  le score lexicographique suffit, et les gains de distinctes égalisent les multiplicités.
+- Dès p = 0,05 l'effet est là ; p entre 0,05 et 0,2 est équivalent. |F| = 2 n'apporte rien.
+- **`--hguard on` (aucun mouvement qui baisse Σ H(X_{−b}))** coûte cher en distinctes (293 avec degré 4, 281 sans) : les
+  chemins qui gagnent des distinctes passent souvent par une petite baisse d'entropie. Il maximise H (5,129) mais n'est
+  pas retenu.
+- **Réalisme** : les paires à distance ≤ 1 passent sous la référence P* (8714 contre 9086, −4 %). C'est une conséquence
+  des distinctes en plus, pas d'un objectif de ressemblance. À surveiller au vu de « Référence de réalisme ».
+- **Nouveau défaut : `--entropy full --dentropy loo --deg4 0.2`** (`--deg4 0` pour revenir à l'ancien).
+
 ## Pistes restantes (en restant dans un greedy)
 
 - ~~Dé-cloner après chaque colonne~~ : testé (`--coldeclone`), +22 distinctes sur la construction mais aucun gain
   après dé-clonage final (voir plus haut). Le plateau ~292 vient du voisinage final, pas du point de départ.
 - ~~Cycles à trois individus~~ : testé (`--cycle`), aucun gain (composées d'échanges sur le même S).
-- Élargir vraiment le voisinage : mouvements qui changent plusieurs ensembles S à la fois, invalides séparément mais
-  exacts ensemble (éléments d'une base de Markov de degré > 2 du modèle des tables).
+- ~~Élargir le voisinage par des mouvements de degré 4~~ : fait (`--deg4`), +10 à +14 distinctes. Suite possible : deux
+  ensembles S différents pour les deux paires, chaînes d'éjection (degré 6+), énumération exacte sur 3–4 individus.
 - Combiner le greedy 2 (meilleure population brute) avec un dé-clonage adapté à des doublons concentrés.
 - Mieux choisir l'ordre des attributs en fonction de la diversité finale, pas seulement de la faisabilité.
