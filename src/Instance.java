@@ -37,6 +37,31 @@ public final class Instance {
         return new Instance(K, n, attrNames, valueNames, dom, tableIds, scope, stride, targets);
     }
 
+    private int[][] active;
+    private boolean activeDone;
+
+    /**
+     * Personas actives (toutes leurs cellules ont une cible > 0), énumérées une fois ;
+     * null si l'espace des personas est trop grand pour être énuméré.
+     */
+    public synchronized int[][] activePersonas() {
+        if (activeDone) return active;
+        activeDone = true;
+        double space = 1;
+        for (int d : dom) space *= d;
+        if (space > 5_000_000) return active = null;
+        List<int[]> ps = new ArrayList<>();
+        int[] x = new int[K];
+        for (long id = 0; id < (long) space; id++) {
+            long rem = id;
+            for (int b = K - 1; b >= 0; b--) { x[b] = (int) (rem % dom[b]); rem /= dom[b]; }
+            boolean ok = true;
+            for (int t = 0; t < T && ok; t++) if (target[t][cellOf(t, x)] == 0) ok = false;
+            if (ok) ps.add(x.clone());
+        }
+        return active = ps.toArray(new int[0][]);
+    }
+
     /** Index de la cellule de la table t pour un individu (valeurs complètes). */
     public int cellOf(int t, int[] values) {
         int idx = 0;

@@ -103,7 +103,7 @@ public class ColumnGreedy {
         int[] ord = order != null ? order : defaultOrder();
         int[][] pop = new int[N][K];
         boolean[] known = new boolean[K];
-        columnsRepaired = 0; columnsFailed = 0; backtracks = 0; deepBacktracks = 0; failLog.clear(); lastOrder = ord;
+        columnsRepaired = 0; columnsFailed = 0; backtracks = 0; deepBacktracks = 0; columnGain = 0; failLog.clear(); lastOrder = ord;
 
         for (int pos = 0; pos < K; pos++) {
             int a = ord[pos];
@@ -136,8 +136,40 @@ public class ColumnGreedy {
                 }
             }
             if (left > 0) { columnsFailed++; failLog.add(in.attrNames[a] + "@" + pos + ":" + left); }
+            // Dé-clonage intermédiaire : sur les attributs déjà fixés, tant que la population partielle est exacte.
+            // Les échanges sont plus nombreux qu'à la fin (frontières restreintes aux connus).
+            else if (columnDeclone > 0 && columnsFailed == 0 && pos >= columnDecloneFrom && pos < K - 1) {
+                int mask = 0;
+                for (int b = 0; b < K; b++) if (known[b]) mask |= 1 << b;
+                Declone dc = new Declone(in, rnd, mask);
+                dc.timeMs = columnDeclone; dc.neutral = columnNeutral; dc.spread = columnSpread;
+                if (columnBound && in.activePersonas() != null) dc.cap = potentials(known);
+                int before = distinctKnown(pop, known);
+                dc.run(pop);
+                columnGain += distinctKnown(pop, known) - before;
+            }
         }
         return pop;
+    }
+
+    public long columnDeclone = 0;     // budget (ms) du dé-clonage après chaque colonne (0 = désactivé)
+    public int columnDecloneFrom = 1;  // première position (dans l'ordre) après laquelle on dé-clone
+    public double columnNeutral = 1.0; // probabilité d'accepter un échange de gain nul
+    public boolean columnSpread = false; // à distinctes égales, étaler les jumeaux (Σ m² décroît)
+    public boolean columnBound = false; // objectif Σ min(m_g, potentiel g) au lieu des distinctes partielles
+    public int columnGain;             // diagnostics : distinctes partielles gagnées, sommées sur les colonnes
+
+    /** Potentiel de chaque persona partielle (attributs connus) : nombre de personas actives qui la prolongent. */
+    protected HashMap<Long, Integer> potentials(boolean[] known) {
+        HashMap<Long, Integer> pot = new HashMap<>();
+        for (int[] x : in.activePersonas()) pot.merge(knownKey(x, known), 1, Integer::sum);
+        return pot;
+    }
+
+    private int distinctKnown(int[][] pop, boolean[] known) {
+        HashSet<Long> h = new HashSet<>();
+        for (int[] x : pop) h.add(knownKey(x, known));
+        return h.size();
     }
 
     public int columnRetries = 3;     // nouveaux tirages d'une colonne qui échoue
@@ -219,6 +251,21 @@ public class ColumnGreedy {
         Ahead ah = lookAhead ? lookAhead(pop, known, a) : null;
         prepareColumn(known, a);
 
+        // entropie « sans un attribut » : pour chaque b connu (b != a), comptes des cellules de X_{(C ∪ a) \ b},
+        // indexées par la signature de l'individu sans b (avec a = 0) ; la cellule pour a = v est masked + v * radix[a]
+        int[] kb = new int[0];
+        long[][] masked = null;
+        List<HashMap<Long, Integer>> looCnt = null;
+        if (entropy == 2) {
+            List<Integer> l = new ArrayList<>();
+            for (int b = 0; b < in.K; b++) if (known[b] && b != a) l.add(b);
+            kb = l.stream().mapToInt(Integer::intValue).toArray();
+            masked = new long[N][kb.length];
+            for (int i = 0; i < N; i++) for (int q = 0; q < kb.length; q++) masked[i][q] = baseKey[i] - pop[i][kb[q]] * radix[kb[q]];
+            looCnt = new ArrayList<>();
+            for (int q = 0; q < kb.length; q++) looCnt.add(new HashMap<>());
+        }
+
         // --- 1. glouton : individus les plus contraints d'abord ---
         boolean[] done = new boolean[N];
         HashMap<Long, int[]> twins = new HashMap<>();   // signature -> nb déjà affectés par valeur
@@ -239,12 +286,21 @@ public class ColumnGreedy {
             int bv = -1; double bs = -Double.MAX_VALUE;
             for (int v = 0; v < d; v++) {
                 int mr = minRes(res, base[i], strideA, v);
-                double s = (mr > 0 ? 1e6 : 0) + (ah == null || ah.ok(i, v) ? 1e5 : 0)
-                        + diversity(mr, tw, v, baseKey[i] + v * radix[a]);
+                double pref;
+                if (entropy == 0) pref = diversity(mr, tw, v, baseKey[i] + v * radix[a]);
+                else {
+                    // gain de Shannon : -δ(n) par cellule touchée (δ(n) = (n+1)ln(n+1) - n ln n), plus α ln(mr)
+                    double g = delta(tw[v]);
+                    for (int q = 0; q < kb.length; q++)
+                        g += lambda * delta(looCnt.get(q).getOrDefault(masked[i][q] + v * radix[a], 0));
+                    pref = 5e4 - g + (mr > 0 ? alpha * Math.log(mr) : mr) + 1e-6 * rnd.nextDouble();
+                }
+                double s = (mr > 0 ? 1e6 : 0) + (ah == null || ah.ok(i, v) ? 1e5 : 0) + pref;
                 if (s > bs) { bs = s; bv = v; }
             }
             if (minRes(res, base[i], strideA, bv) <= 0) failed = true;
             val[i] = bv; done[i] = true; tw[bv]++;
+            for (int q = 0; q < kb.length; q++) looCnt.get(q).merge(masked[i][q] + bv * radix[a], 1, Integer::sum);
             if (ah != null) ah.add(i, bv);
             for (int k = 0; k < tabs.length; k++) res[k][base[i][k] + bv * strideA[k]]--;
         }
@@ -263,6 +319,25 @@ public class ColumnGreedy {
         return left;
     }
 
+
+    /**
+     * Préférence entre valeurs faisables : 0 = séparation des jumeaux (diversity), 1 = gain de Shannon sur H(X_{C ∪ a})
+     * (règle de chaîne : chaque colonne maximise H(X_a | X_C)), 2 = idem + lambda × Σ_b H(X_{(C ∪ a) \ b}), qui pénalise
+     * les paires à distance 1 (H(X_{-b}) = H(X) - H(X_b | X_{-b})).
+     */
+    public int entropy = 0;
+    public double lambda = 1.0;        // poids des entropies sans un attribut (entropy = 2)
+    public double alpha = 0.3;         // poids de ln(mr) (marge sur les résiduels) dans le mode entropie
+
+    private double[] deltaTab = new double[0];
+    /** δ(n) = (n+1) ln(n+1) - n ln n : hausse de Σ n ln n quand une cellule de n individus en reçoit un de plus. */
+    private double delta(int n) {
+        if (n >= deltaTab.length) {
+            deltaTab = new double[Math.max(n + 1, in.N + 1)];
+            for (int k = 0; k < deltaTab.length; k++) deltaTab[k] = (k + 1) * Math.log(k + 1) - (k == 0 ? 0 : k * Math.log(k));
+        }
+        return deltaTab[n];
+    }
 
     /** Appelé au début de chaque remplissage de la colonne a (known[a] = true). */
     protected void prepareColumn(boolean[] known, int a) {}

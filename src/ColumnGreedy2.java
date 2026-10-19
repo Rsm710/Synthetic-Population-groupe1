@@ -20,27 +20,13 @@ public final class ColumnGreedy2 extends ColumnGreedy {
 
     public ColumnGreedy2(Instance in, Random rnd) {
         super(in, rnd);
-        double space = 1;
-        for (int d : in.dom) space *= d;
-        List<int[]> ps = new ArrayList<>();
-        if (space <= 5_000_000) {
-            int[] x = new int[in.K];
-            for (long id = 0; id < (long) space; id++) {
-                long rem = id;
-                for (int b = in.K - 1; b >= 0; b--) { x[b] = (int) (rem % in.dom[b]); rem /= in.dom[b]; }
-                boolean ok = true;
-                for (int t = 0; t < in.T && ok; t++) if (in.target[t][in.cellOf(t, x)] == 0) ok = false;
-                if (ok) ps.add(x.clone());
-            }
-            active = ps.toArray(new int[0][]);
-        } else active = null;
+        active = in.activePersonas();
     }
 
     @Override protected void prepareColumn(boolean[] known, int a) {
         this.known = known;
         if (active == null) return;
-        pot = new HashMap<>();
-        for (int[] x : active) pot.merge(knownKey(x, known), 1, Integer::sum);
+        pot = potentials(known);
     }
 
     private int potential(long branch) {
