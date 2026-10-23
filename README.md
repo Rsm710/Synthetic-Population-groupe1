@@ -1,8 +1,10 @@
 # Population synthétique : greedy colonne par colonne
 
 On reconstruit N individus décrits par K attributs catégoriels. La population doit respecter **exactement** des
-tables de marges, avec le moins possible de clones (individus identiques). Tout est lu depuis un CSV
-`cell_id,table_id,arity,scope,cell,target` : K, N, les domaines, les tables et leurs arités.
+tables de marges et être la plus diversifiée possible. La diversité se mesure par l'**entropie de Shannon H(X)** de la
+population (voir [Mesurer la diversité](#mesurer-la-diversité--lentropie-hx)) ; le nombre de personas distinctes est
+suivi en second. Tout est lu depuis un CSV `cell_id,table_id,arity,scope,cell,target` : K, N, les domaines, les tables
+et leurs arités.
 
 La méthode est un **greedy** : une construction, puis un post-traitement local qui garde les marges exactes. CP-SAT
 sert uniquement de référence, pour connaître l'optimum.
@@ -11,17 +13,21 @@ sert uniquement de référence, pour connaître l'optimum.
 
 Instance `constraint_cells.csv` : N = 500 individus, K = 12 attributs à 3 valeurs, 45 tables d'arité 1 à 4.
 
-| | Personas distinctes (moy. / meilleure) | Temps / run |
-|---|---|---|
-| **défaut** | **302,5 / 307** | 2,2 s |
-| défaut, dé-clonage 6 s | 307,9 / 311 | 6,6 s |
-| optimum prouvé (CP-SAT) | 331 | 900 s |
+| | H(X) moy. / meilleur (nats) | e^H moy. | Distinctes (moy. / meilleure) | Temps / run |
+|---|---|---|---|---|
+| **objectif entropie** (`--dentropy full --dmu 0 --deg4 0.5`) | **5,194 / 5,206** | **180** | 295,0 / 299 | 2,0 s |
+| défaut actuel du code (distinctes d'abord) | 5,097 / 5,106 | 164 | 302,4 / 307 | 2,1 s |
+| distinctes d'abord, entropie H à égalité (`--dentropy full`) | 5,134 / 5,146 | 170 | **313,0 / 318** | 2,0 s |
+| optimum des distinctes prouvé (CP-SAT) | ≈ 5,1 (estimé) | ≈ 165 | 331 | 900 s |
+| plafond théorique ln N (500 individus distincts) | 6,215 | 500 | 500 | |
 
 - Tous les runs sont exacts : erreur nulle sur toutes les cellules, revérifiée par `Evaluation`.
-- On atteint **91 % de l'optimum en moyenne** et 94 % au meilleur run. Les marges imposent à elles seules 169 copies
-  en trop.
-- Les ressemblances entre individus restent proches d'une population réaliste (voir
-  [Référence de réalisme](#référence-de-réalisme)).
+- e^H est le **nombre effectif de personas** : 180 personas de même taille auraient la même entropie que la population
+  obtenue, qui en contient 295.
+- Maximiser H et maximiser les distinctes ne vont pas dans le même sens : l'objectif entropie perd 7 distinctes mais
+  réduit les gros paquets (multiplicité max 30 au lieu de 39, paires de clones −27 %).
+- Les marges imposent à elles seules au moins 169 copies en trop ; le plafond ln N est donc hors d'atteinte. Le vrai
+  plafond (entropie maximale d'une population exacte) est inconnu.
 
 ## Démarrage rapide (PowerShell, JDK 21)
 
@@ -38,15 +44,16 @@ Pour des accents corrects dans la console : `[Console]::OutputEncoding = [Text.E
 Autres commandes :
 
 ```powershell
+java -cp out GreedyMain constraint_cells.csv --runs 20 --quiet --dentropy full --dmu 0 --deg4 0.5   # objectif entropie
 java -cp out GreedyMain constraint_cells.csv --runs 20 --quiet --declone 0   # construction seule
 java -cp out GreedyMain constraint_cells.csv --runs 20 --quiet --deg4 0      # sans doubles échanges
-java -cp out Deg4Diag constraint_cells.csv 1 population.csv                  # mouvements de degré 4 améliorants
+java -cp out Deg4Diag constraint_cells.csv 1 [--cross] population.csv        # mouvements de degré 4 améliorants
 java -cp out Bounds constraint_cells.csv population.csv                      # bornes par propagation
 java -cp out Main constraint_cells.csv --runs 2 --time 8000                  # ancienne référence
 
 # optimum exact (Python 3.12 : pip install ortools pandas) ; '-' au lieu de population.csv = sans solution de départ
 python tools\reference_cpsat.py constraint_cells.csv 900 population.csv cpsat_population.csv
-# référence de réalisme (numpy) : échantillon de N individus tiré selon P*
+# référence neutre (numpy) : loi d'entropie maximale P* et échantillon de N individus tiré selon P*
 python tools\reference_ipf.py constraint_cells.csv
 ```
 
@@ -63,11 +70,69 @@ python tools\reference_ipf.py constraint_cells.csv
 | `src/Deg4Diag.java`, `Bounds.java`, `Lns.java` | outils d'analyse (non utilisés par `GreedyMain`) |
 | `src/Main.java`, `GreedyBuilder.java`, `LocalSearch.java`, `Population.java` | ancienne référence : greedy individuel + recuit |
 | `tools/reference_cpsat.py` | optimum exact par CP-SAT |
-| `tools/reference_ipf.py` | référence de réalisme : loi d'entropie maximale P* (IPF) |
+| `tools/reference_ipf.py` | référence neutre : loi d'entropie maximale P* (IPF) |
+
+## Mesurer la diversité : l'entropie H(X)
+
+### Définition
+
+Chaque persona c est portée par n_c des N individus. On tire un individu au hasard : il a la persona c avec la
+probabilité p_c = n_c / N. L'entropie de la population est
+
+**H(X) = − Σ_c p_c ln p_c = ln N − (1/N) Σ_c n_c ln n_c** (en nats).
+
+C'est l'**incertitude sur la persona d'un individu tiré au hasard** : plus elle est grande, plus il est difficile de
+deviner qui l'on va tirer.
+
+### Lecture : e^H, le nombre effectif de personas
+
+e^H est le nombre de personas **toutes de même taille** qui donneraient la même entropie. Il se lit comme un nombre
+de distinctes corrigé du poids des paquets.
+
+| Population | H(X) | e^H | Distinctes |
+|---|---|---|---|
+| 500 individus tous différents | ln 500 = 6,215 | 500 | 500 |
+| objectif entropie | 5,194 | 180 | 295 |
+| défaut actuel du code | 5,097 | 164 | 302 |
+| 500 clones | 0 | 1 | 1 |
+
+### Pourquoi H plutôt que les distinctes
+
+Les distinctes comptent une persona pour 1, qu'elle porte 1 ou 40 individus. H pondère chaque persona par son poids :
+un gros paquet rend la population prévisible.
+
+Exemple avec 10 individus :
+- **A** : un paquet de 5 et 5 individus seuls → 6 distinctes, H = 1,50, e^H ≈ 4,5 ;
+- **B** : 5 paquets de 2 → 5 distinctes, H = 1,61, e^H = 5.
+
+A a plus de distinctes, B est plus diversifiée. Comme n ln n est convexe, H récompense l'**équilibre** des tailles de
+paquets : retirer un individu d'un paquet de 40 rapporte beaucoup, créer une persona nouvelle à partir d'un paquet de
+2 rapporte peu. Les distinctes ne récompensent que le **nombre** de paquets.
+
+C'est pourquoi l'optimum des distinctes (CP-SAT, 331) n'est pas celui de l'entropie : il concentre ses doublons dans
+deux paquets ×49 et ×46, et son entropie est estimée vers 5,1 (e^H ≈ 165), en dessous des 5,19 de l'objectif entropie
+avec 295 distinctes.
+
+### Ce que les marges imposent
+
+Les tables fixent exactement l'entropie de chaque projection qu'elles couvrent (H(A3), H(A3, A9)…) : elle est la même
+pour toute population exacte. H(X) ne peut monter qu'en jouant sur les combinaisons qu'aucune table ne fixe.
+
+Soit P̂ la loi empirique d'une population exacte et P* la loi d'entropie maximale sous les tables (IPF). Alors
+KL(P̂ ‖ P*) = H(P*) − H(P̂) : maximiser H(P̂) rapproche de la loi la moins structurée compatible avec les marges.
+
+### Mesures voisines
+
+- **Σ_b H(X_{−b})**, où X_{−b} est la population privée de l'attribut b. On a H(X_{−b}) = ln N si et seulement si tous
+  les individus restent distincts quand on ignore b. Le déficit D1 = K·ln N − Σ_b H(X_{−b}) est donc nul si et
+  seulement si aucune paire n'est à distance ≤ 1.
+- **Paires à distance 0, 1, 2** : nombre de paires d'individus qui diffèrent sur 0 (clones), 1 ou 2 attributs.
 
 ## Méthode
 
-Défaut : `--entropy full --dentropy loo --deg4 0.2`. Un run = construction, puis 1,5 s de dé-clonage.
+Défaut actuel du code : `--entropy full --dentropy loo --deg4 0.2` (distinctes d'abord). Configuration recommandée pour
+l'objectif entropie : `--entropy full --dentropy full --dmu 0 --deg4 0.5`. Un run = construction, puis 1,5 s de
+dé-clonage.
 
 Vocabulaire :
 - une **persona** est une combinaison de valeurs des K attributs ;
@@ -132,20 +197,14 @@ Markov contient des mouvements de degré ≥ 4.
 - double échange (probabilité 0,2) : on essaie jusqu'à 4 partenaires j, puis on cherche toutes les paires (k, l) en un
   passage sur la population.
 
-Les gains positifs et nuls sont acceptés, et on garde la meilleure population rencontrée.
+On garde la meilleure population rencontrée.
 
-**Score lexicographique.** On maximise d'abord le nombre de distinctes, puis, à égalité, Σ_b H(X_{−b}) (`--dentropy
-loo`). Ici X_{−b} est la population privée de l'attribut b, et H(X_A) = ln N − (1/N) Σ_c n_c ln n_c, en nats.
-- H(X_{−b}) = ln N si et seulement si tous les individus restent distincts quand on ignore b.
-- Le déficit D1 = K·ln N − Σ_b H(X_{−b}) est donc nul si et seulement si aucune paire n'est à distance ≤ 1.
-- Les comptes sont tenus à jour de façon incrémentale.
+**Score.** Deux modes :
+- **objectif entropie** (`--dentropy full --dmu 0`) : le score d'un mouvement est N·ΔH(X) = −Δ Σ_c n_c ln n_c ;
+- **lexicographique** (`--dmu -1`, défaut actuel) : d'abord la variation des distinctes, puis, à égalité, le critère
+  d'entropie choisi par `--dentropy` (H(X) avec `full`, Σ_b H(X_{−b}) avec `loo`).
 
-### Pourquoi l'entropie
-
-Soit P̂ une loi empirique qui respecte exactement les tables, et P* la loi d'entropie maximale sous ces tables (IPF).
-Alors KL(P̂ ‖ P*) = H(P*) − H(P̂) : maximiser H(P̂) rapproche de la loi la moins structurée compatible avec les marges.
-Les entropies des projections incluses dans une table sont imposées ; seules les projections non couvertes peuvent
-changer.
+Les gains positifs et nuls sont acceptés. Les comptes sont tenus à jour de façon incrémentale.
 
 ### Mesures (`Evaluation`)
 
@@ -158,17 +217,25 @@ changer.
 
 ## Résultats
 
-20 runs (seeds 0–19), dé-clonage 1,5 s sauf mention contraire, tous exacts.
+20 runs (seeds 0–19), dé-clonage 1,5 s sauf mention contraire, tous exacts. e^H est arrondi à l'unité ; « — » :
+non mesuré.
 
-| Configuration | Distinctes moy. | Meilleure | Temps / run |
-|---|---|---|---|
-| construction seule (greedy 1) | 251,9 | 266 | 0,7 s |
-| construction seule (greedy 2) | 258,8 | 270 | 1,1 s |
-| + dé-clonage par échanges (`--entropy off --dentropy off --deg4 0`) | 292,5 | 297 | 2,6 s |
-| + entropie (`--entropy full --dentropy loo --deg4 0`) | 292,8 | 299 | 2,2 s |
-| **+ doubles échanges compensés (défaut)** | **302,5** | 307 | 2,2 s |
-| défaut, dé-clonage 6 s (10 runs) | 307,9 | 311 | 6,6 s |
-| **optimum (CP-SAT, prouvé)** | **331** | 331 | 900 s |
+| Configuration | H(X) moy. | e^H | Distinctes moy. | Meilleure | Temps / run |
+|---|---|---|---|---|---|
+| construction seule (greedy 1, `--entropy off`) | 4,943 | 140 | 251,9 | 266 | 0,7 s |
+| construction seule (greedy 1, `--entropy full`) | 4,959 | 142 | 256,9 | — | — |
+| construction seule (greedy 2) | — | — | 258,8 | 270 | 1,1 s |
+| + dé-clonage par échanges (`--entropy off --dentropy off --deg4 0`) | 4,993 | 147 | 292,5 | 297 | 2,6 s |
+| + entropie (`--entropy full --dentropy loo --deg4 0`) | 5,033 | 153 | 292,8 | 299 | 2,2 s |
+| + doubles échanges compensés (défaut actuel du code) | 5,097 | 164 | 302,5 | 307 | 2,2 s |
+| défaut actuel, dé-clonage 6 s (10 runs) | 5,121 | 168 | 307,9 | 311 | 6,6 s |
+| distinctes puis H (`--dentropy full`) | 5,134 | 170 | **313,0** | **318** | 2,0 s |
+| **objectif entropie (`--dentropy full --dmu 0 --deg4 0.5`)** | **5,194** | **180** | 295,0 | 299 | 2,0 s |
+| objectif entropie, dé-clonage 6 s (10 runs) | **5,200** | **181** | 296,6 | — | 6,7 s |
+| optimum des distinctes (CP-SAT, prouvé) | ≈ 5,1 (estimé) | ≈ 165 | **331** | 331 | 900 s |
+
+L'entropie de la population CP-SAT est estimée à partir de sa structure (321 personas seules, paquets ×49, ×46 et 8
+paquets d'environ 10) : le fichier n'est plus disponible pour la mesurer.
 
 ### Comparaison avec l'optimum
 
@@ -184,32 +251,37 @@ changer.
   sont en exemplaire unique. Le greedy répartit ses doublons sur environ 30 personas : les copies évitables sont dans
   les petits paquets (×2 à ×7).
 
-### Référence de réalisme
+### Référence neutre : la loi d'entropie maximale P*
 
-**Faut-il réduire les quasi-clones pour être plus réaliste ? Non.** On les calibre sur une population typique, on ne
-les minimise pas.
+`tools/reference_ipf.py` calcule par IPF la loi P* d'entropie maximale sous les tables, sur les 3¹² personas, puis
+l'espérance des mesures pour 500 individus tirés selon P*.
 
+**P* n'est pas une référence de réalisme.** L'IPF produit des poids non entiers, et un échantillon tiré selon P* ne
+respecte les marges qu'en moyenne. Surtout, P* suppose l'indépendance pour tout ce que les tables ne décrivent pas,
+alors qu'une vraie population est plus structurée : si R est une population réelle qui respecte les tables,
+KL(R ‖ P*) = H(P*) − H(R) ≥ 0, donc R a **moins** d'entropie que P*. P* sert seulement de point de comparaison neutre.
+
+Deux remarques sur les ressemblances entre individus :
 - **Les marges fixent la distance moyenne.** La proportion de paires qui diffèrent sur un attribut ne dépend que de sa
-  marge. La distance moyenne entre deux individus vaut donc **4,57 sur 12** pour toute population exacte. Quatre
+  marge : la distance moyenne entre deux individus vaut **4,57 sur 12** pour toute population exacte. Quatre
   attributs sont presque constants (A8 : 98 % sur une valeur, A0 : 92 %, A6 : 91 %, A10 : 90 %). Retirer des paires
   proches en crée forcément plus loin.
-- **Une population réelle contient des clones.** Si les marges viennent de 500 vraies personnes, cette population est
-  exacte : elle a donc au moins 169 copies en trop.
-- **Échantillon typique.** `tools/reference_ipf.py` calcule P* par IPF sur les 3¹² personas, puis l'espérance des
-  mesures pour 500 individus tirés selon P*.
+- **Toute population exacte contient des clones** : au moins 169 copies en trop.
 
-| | Distinctes | Paires d = 0 | d = 1 | **d ≤ 1** | d = 2 | Voisins à d ≤ 1 par individu |
-|---|---|---|---|---|---|---|
-| **échantillon typique de P*** | 232 | 1935 | 7151 | **9086** | 13420 | 36,3 |
-| `--dentropy off --deg4 0` | 292,7 | 2200 | 7167 | 9367 | | 37,5 |
-| `--dentropy loo --deg4 0` | 292,8 | 1980 | 7066 | 9046 | 13073 | 36,2 |
-| **défaut (`--deg4 0.2`)** | 302,5 | 1849 | 6866 | **8714** | 13271 | 34,9 |
-| `--dmu 0 --deg4 0` | 276,9 | 1631 | 6893 | 8524 | 13396 | 34,1 |
+| | H(X) | e^H | Distinctes | Paires d = 0 | d = 1 | **d ≤ 1** | d = 2 | Voisins à d ≤ 1 par individu |
+|---|---|---|---|---|---|---|---|---|
+| loi P* elle-même | 5,696 | 298 | | | | | | |
+| **échantillon de 500 tiré selon P*** | 4,862 ± 0,069 | 129 | 232 | 1935 | 7151 | **9086** | 13420 | 36,3 |
+| `--dentropy off --deg4 0` | 4,993 | 147 | 292,7 | 2200 | 7167 | 9367 | — | 37,5 |
+| `--dentropy loo --deg4 0` | 5,033 | 153 | 292,8 | 1980 | 7066 | 9046 | 13073 | 36,2 |
+| défaut actuel (`--deg4 0.2`) | 5,097 | 164 | 302,5 | 1849 | 6866 | 8714 | 13271 | 34,9 |
+| `--dentropy loo --dmu 0 --deg4 0` | — | — | 276,9 | 1631 | 6893 | 8524 | 13396 | 34,1 |
+| **objectif entropie** | **5,194** | **180** | 295,0 | 1344 | 6603 | **7947** | 13789 | 31,8 |
 
-- Sans doubles échanges, le niveau de ressemblance est celui d'un échantillon typique (9046 contre 9086 paires).
-- Le défaut est 4 % en dessous. C'est une conséquence des distinctes gagnées, pas un objectif ; c'est accepté.
-- `--dmu 0` vise les ressemblances et perd 16 distinctes : il ne sert que si l'on cherche autre chose que le réalisme
-  (confidentialité, diversité imposée).
+- Toutes nos populations ont plus d'entropie qu'un échantillon de P* : elles respectent les marges exactement et sont
+  optimisées contre les clones.
+- H(P*) = 5,70 (e^H ≈ 298) est hors d'atteinte avec 500 individus entiers : les marges imposent des paquets.
+- L'objectif entropie retire 13 % des paires à distance ≤ 1 par rapport à un échantillon de P*, surtout des clones.
 
 ## Options de `GreedyMain`
 
@@ -268,16 +340,16 @@ doublons concentrés laissent moins d'échanges utiles.
 Sans dé-clonage. `loo` ajoute au score λ Σ_b δ(n_{−b,v}), le compte de la cellule de X_{−b}, pour pénaliser les
 quasi-clones.
 
-| Variante | Distinctes | H(X) | Σ H(X_b \| X_−b) | Paires d = 1 | Σ I paires libres |
-|---|---|---|---|---|---|
-| off (beta = 2) | 251,9 | 4,943 | 2,478 | 7131 | 0,372 |
-| full, α = 0 | 240,4 | 4,863 | 2,320 | 7245 | 0,375 |
-| full, α = 0,1 | 248,3 | 4,954 | 2,497 | 6929 | 0,353 |
-| **full, α = 0,3** | **256,9** | **4,959** | 2,505 | 7056 | 0,357 |
-| full, α = 0,5 / 1 / 3 | 258,1 / 256,7 / 245,6 | 4,948 / 4,924 / 4,867 | | | |
-| loo, α = 0, λ = 1 | 240,1 | 4,865 | 2,272 | 7167 | 0,355 |
-| loo, α = 0,3, λ = 0,03 / 0,1 / 1 | 251,9 / 247,8 / 242,0 | 4,950 / 4,929 / 4,881 | 2,484 / 2,423 / 2,285 | ~7045 | 0,35–0,36 |
-| loo, α = 1, λ = 0,1 / 0,3 / 1 / 3 | 257,1 / 253,3 / 244,6 / 242,0 | 4,935 / 4,938 / 4,915 / 4,872 | | | |
+| Variante | Distinctes | H(X) | e^H | Σ H(X_b \| X_−b) | Paires d = 1 | Σ I paires libres |
+|---|---|---|---|---|---|---|
+| off (beta = 2) | 251,9 | 4,943 | 140 | 2,478 | 7131 | 0,372 |
+| full, α = 0 | 240,4 | 4,863 | 129 | 2,320 | 7245 | 0,375 |
+| full, α = 0,1 | 248,3 | 4,954 | 142 | 2,497 | 6929 | 0,353 |
+| **full, α = 0,3** | **256,9** | **4,959** | **142** | 2,505 | 7056 | 0,357 |
+| full, α = 0,5 / 1 / 3 | 258,1 / 256,7 / 245,6 | 4,948 / 4,924 / 4,867 | 141 / 138 / 130 | | | |
+| loo, α = 0, λ = 1 | 240,1 | 4,865 | 130 | 2,272 | 7167 | 0,355 |
+| loo, α = 0,3, λ = 0,03 / 0,1 / 1 | 251,9 / 247,8 / 242,0 | 4,950 / 4,929 / 4,881 | 141 / 138 / 132 | 2,484 / 2,423 / 2,285 | ~7045 | 0,35–0,36 |
+| loo, α = 1, λ = 0,1 / 0,3 / 1 / 3 | 257,1 / 253,3 / 244,6 / 242,0 | 4,935 / 4,938 / 4,915 / 4,872 | 139 / 139 / 136 / 131 | | | |
 
 - Le gain glouton seul (α = 0) est myope : il étale chaque groupe sans regarder les marges des cellules.
 - Contrôle sur les seeds 100–139 : off H = 4,947 ± 0,029 ; full α = 0,3 : 4,950 ± 0,024 (+4,7 distinctes).
@@ -343,14 +415,14 @@ Le dé-clonage final atteint le même plateau (~292) que la construction donne 2
 - `loo` maximise Σ_b H(X_{−b}) ;
 - `near` minimise Σ_b H(X_b | X_{−b}), qui ne compte que la distance exactement 1.
 
-| Construction | `--dentropy` | Distinctes | H(X) | Σ H(X_b \| X_−b) | Paires d = 1 | Σ I paires libres |
-|---|---|---|---|---|---|---|
-| off | off | 292,5 | 4,993 | 2,607 | 7179 | 0,392 |
-| off | full | 292,4 | 5,024 | 2,683 | 7156 | 0,380 |
-| off | loo | 291,4 | 5,023 | 2,667 | 7136 | 0,374 |
-| off | near | 291,4 | 4,944 | **2,424** | 6983 | 0,388 |
-| **full (α = 0,3)** | **full** | **293,4** | **5,036** | 2,716 | 7100 | **0,370** |
-| loo (α = 0,3, λ = 0,1) | near | 290,5 | 4,941 | 2,426 | **6903** | 0,383 |
+| Construction | `--dentropy` | Distinctes | H(X) | e^H | Σ H(X_b \| X_−b) | Paires d = 1 | Σ I paires libres |
+|---|---|---|---|---|---|---|---|
+| off | off | 292,5 | 4,993 | 147 | 2,607 | 7179 | 0,392 |
+| off | full | 292,4 | 5,024 | 152 | 2,683 | 7156 | 0,380 |
+| off | loo | 291,4 | 5,023 | 152 | 2,667 | 7136 | 0,374 |
+| off | near | 291,4 | 4,944 | 140 | **2,424** | 6983 | 0,388 |
+| **full (α = 0,3)** | **full** | **293,4** | **5,036** | **154** | 2,716 | 7100 | **0,370** |
+| loo (α = 0,3, λ = 0,1) | near | 290,5 | 4,941 | 140 | 2,426 | **6903** | 0,383 |
 
 En comptant aussi les clones :
 
@@ -416,20 +488,20 @@ La population est un optimum local pour les échanges, mais pas pour le degré 4
 
 **Réglages :**
 
-| `--deg4` | Distinctes | H(X) | D1 | Paires d = 0 | d = 1 | **d ≤ 1** | d = 2 | Temps / run |
-|---|---|---|---|---|---|---|---|---|
-| 0 | 292,6 | 5,033 | 16,87 | 1988 | 7080 | 9068 | 13063 | 2,4 s |
-| 0,05 | 302,2 | 5,094 | 16,26 | 1851 | 6876 | 8727 | 13294 | 2,2 s |
-| 0,1 | 302,1 | 5,092 | 16,28 | 1860 | 6849 | 8709 | 13313 | 2,2 s |
-| **0,2** | **302,5** | 5,097 | 16,22 | 1849 | 6866 | 8714 | 13271 | 2,2 s |
-| 0,3 | 300,9 | 5,096 | 16,23 | 1821 | 6848 | 8669 | 13300 | 2,2 s |
-| 0,5 | 301,5 | **5,105** | **16,15** | 1800 | 6787 | 8587 | 13360 | 2,3 s |
-| 0,1 / 0,2 avec `--dfmax 2` | 301,7 / 302,6 | 5,087 / 5,098 | 16,33 / 16,23 | | | 8804 / 8739 | | 2,2 s |
-| 0,1 avec `--hguard on` | 293,3 | 5,129 | 15,93 | 1570 | 6745 | 8315 | 13530 | 2,2 s |
-| 0 avec `--hguard on` | 280,7 | 5,059 | 16,61 | 1706 | 6934 | 8640 | 13362 | 2,1 s |
+| `--deg4` | Distinctes | H(X) | e^H | D1 | Paires d = 0 | d = 1 | **d ≤ 1** | d = 2 | Temps / run |
+|---|---|---|---|---|---|---|---|---|---|
+| 0 | 292,6 | 5,033 | 153 | 16,87 | 1988 | 7080 | 9068 | 13063 | 2,4 s |
+| 0,05 | 302,2 | 5,094 | 163 | 16,26 | 1851 | 6876 | 8727 | 13294 | 2,2 s |
+| 0,1 | 302,1 | 5,092 | 163 | 16,28 | 1860 | 6849 | 8709 | 13313 | 2,2 s |
+| **0,2** | **302,5** | 5,097 | 164 | 16,22 | 1849 | 6866 | 8714 | 13271 | 2,2 s |
+| 0,3 | 300,9 | 5,096 | 163 | 16,23 | 1821 | 6848 | 8669 | 13300 | 2,2 s |
+| 0,5 | 301,5 | **5,105** | **165** | **16,15** | 1800 | 6787 | 8587 | 13360 | 2,3 s |
+| 0,1 / 0,2 avec `--dfmax 2` | 301,7 / 302,6 | 5,087 / 5,098 | 162 / 164 | 16,33 / 16,23 | | | 8804 / 8739 | | 2,2 s |
+| 0,1 avec `--hguard on` | 293,3 | 5,129 | 169 | 15,93 | 1570 | 6745 | 8315 | 13530 | 2,2 s |
+| 0 avec `--hguard on` | 280,7 | 5,059 | 157 | 16,61 | 1706 | 6934 | 8640 | 13362 | 2,1 s |
 
-Budget 6 s (10 runs) : `--deg4 0` donne 293,5 distinctes (meilleure 297, H = 5,036) ; **`--deg4 0.2` donne 307,9
-(meilleure 311, H = 5,121)**, d ≤ 1 = 8615.
+Budget 6 s (10 runs) : `--deg4 0` donne 293,5 distinctes (meilleure 297, H = 5,036, e^H = 154) ; **`--deg4 0.2` donne
+307,9 (meilleure 311, H = 5,121, e^H = 168)**, d ≤ 1 = 8615.
 
 - Le plateau vers 292 venait bien du voisinage. Avec les doubles échanges, le dé-clonage progresse encore entre 1,5 s
   et 6 s.
@@ -437,6 +509,42 @@ Budget 6 s (10 runs) : `--deg4 0` donne 293,5 distinctes (meilleure 297, H = 5,0
 - Toute probabilité entre 0,05 et 0,2 donne le même résultat. |F| = 2 n'apporte rien.
 - `--hguard on` (aucun mouvement qui baisse Σ H(X_{−b})) coûte cher en distinctes : les chemins qui en gagnent passent
   souvent par une petite baisse d'entropie.
+
+**Doubles échanges sur deux ensembles S différents** (`Deg4Diag --cross`, sur une population finale du défaut à 302
+distinctes, 6 s) : la seconde paire peut échanger un autre ensemble S′. Sur 689 167 mouvements exacts, seuls 35 066
+utilisent S′ ≠ S, et **2** d'entre eux gagnent une distincte (contre 101 avec le même S). Même résultat avec
+|F| ≤ 2. Piste écartée.
+
+Depuis cette version, `Deg4Diag` énumère chaque mouvement de paire une seule fois (A = S ∩ d suffit à le décrire), au
+lieu de le revoir pour chacun des 2047 ensembles S. Le diagnostic passe de 53 s à 6 s, mais ses compteurs portent
+désormais sur des mouvements distincts : ils ne se comparent pas au tableau ci-dessus.
+
+### Objectif entropie (`--dentropy full --dmu 0`)
+
+**Conclusion : maximiser H(X) directement donne 5,194 nats (e^H = 180), soit +0,10 nat par rapport au défaut actuel,
+au prix de 7 distinctes. Les doubles échanges y sont indispensables.**
+
+Avec `--dmu 0`, le dé-clonage n'a plus de terme de distinctes : le score d'un mouvement est N·ΔH(X).
+
+| Configuration | H(X) moy. | Meilleur H | e^H moy. | Distinctes | Mult. max (meilleur run) | Paires d = 0 | d = 1 | d = 2 | Temps / run |
+|---|---|---|---|---|---|---|---|---|---|
+| défaut actuel (`--dentropy loo`, lexicographique) | 5,097 | 5,106 | 164 | 302,4 | 39 | 1838 | 6845 | 13267 | 2,1 s |
+| `--dentropy full` (lexicographique) | 5,134 | 5,146 | 170 | **313,0** | 40 | 1840 | 6828 | 13296 | 2,0 s |
+| `--dentropy full --dmu 0` (`--deg4 0.2`) | 5,177 | 5,204 | 177 | 292,0 | 30 | 1365 | 6633 | 13743 | 2,9 s |
+| `--dentropy full --dmu 0 --deg4 0` | 5,068 | 5,091 | 159 | 278,1 | 40 | 1636 | 6937 | 13380 | 2,9 s |
+| **`--dentropy full --dmu 0 --deg4 0.5`** | **5,194** | **5,206** | **180** | 295,0 | 30 | **1344** | **6603** | 13789 | 2,0 s |
+| `--dentropy full --dmu 0 --deg4 0.8` / `1` | 5,173 / 5,174 | | 176 / 177 | 292,1 / 292,3 | | | | | 3,7 / 3,4 s |
+| `--deg4 0.5 --neutral 0.3` (10 runs) | 5,178 | | 177 | 292,3 | | | | | 2,0 s |
+| `--deg4 0.5`, dé-clonage 6 s (10 runs) | 5,200 | | 181 | 296,6 | | 1344 | 6586 | 13757 | 6,7 s |
+
+- Maximiser H revient à équilibrer les paquets plutôt qu'à créer des personas : −7 distinctes, mais la multiplicité
+  max passe de 39 à 30 et les paires de clones baissent de 27 %.
+- Sans doubles échanges, l'entropie retombe à 5,068 : le voisinage d'échanges simples est trop rigide.
+- La recherche plafonne vite : 6 s au lieu de 1,5 s n'apporte que +0,006 nat.
+- Le mode lexicographique avec `--dentropy full` améliore le défaut actuel **sur les deux critères** (313 distinctes
+  au lieu de 302, H 5,134 au lieu de 5,097).
+- Certains runs `--dmu 0` durent jusqu'à 20 s alors que le dé-clonage est limité à 1,5 s. La cause n'a pas encore été
+  cherchée.
 
 ### Analyses de l'optimum
 
@@ -451,10 +559,11 @@ Budget 6 s (10 runs) : `--deg4 0` donne 293,5 distinctes (meilleure 297, H = 5,0
 
 ## Pistes restantes (en restant dans un greedy)
 
-- Doubles échanges sur deux ensembles S différents pour les deux paires.
+- Viser H(X) dès la construction, pas seulement au dé-clonage.
 - Chaînes d'éjection : un écart compensé en plusieurs paires (degré 6 et plus).
 - Énumération exacte des mouvements sur 3 ou 4 individus.
 - Combiner le greedy 2 (meilleure population brute) avec un dé-clonage adapté à des doublons concentrés.
 - Choisir l'ordre des attributs en fonction de la diversité finale, pas seulement de la faisabilité.
 
-Déjà testé sans gain : dé-clonage après chaque colonne, cycles à trois individus, recuit, rayon 2.
+Déjà testé sans gain : dé-clonage après chaque colonne, cycles à trois individus, recuit, rayon 2, doubles échanges sur
+deux ensembles S différents.
